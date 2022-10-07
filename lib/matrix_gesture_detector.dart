@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/widgets.dart';
 import 'package:vector_math/vector_math_64.dart';
+import 'package:matrix4_transform/matrix4_transform.dart';
 
 typedef MatrixGestureDetectorCallback = void Function(
     Matrix4 matrix,
@@ -40,23 +41,36 @@ class MatrixGestureDetector extends StatefulWidget {
   ///
   final bool shouldScale;
 
+  /// Minimum allowed scale factor
+  ///
+  /// Default to 1.0
+  ///
+  final double minScale;
+
+  /// Maximum allowed scale factor
+  ///
+  /// Default to 5.0
+  ///
+  final double maxScale;
+
   /// Whether to detect rotation gestures during the event processing.
   ///
   /// Defaults to true.
   ///
   final bool shouldRotate;
 
+
+  /// Minimum gesture distance to start rotating
+  ///
+  /// Default to 0.0
+  ///
+  final double minDistanceToRotate;
+
   /// Whether [ClipRect] widget should clip [child] widget.
   ///
   /// Defaults to true.
   ///
   final bool clipChild;
-
-  /// The hit test behavior, passed to the underlying GestureDetector.
-  ///
-  /// Defaults to HitTestBehavior.deferToChild
-  ///
-  final HitTestBehavior behavior;
 
   /// When set, it will be used for computing a "fixed" focal point
   /// aligned relative to the size of this widget.
@@ -68,10 +82,12 @@ class MatrixGestureDetector extends StatefulWidget {
     required this.child,
     this.shouldTranslate = true,
     this.shouldScale = true,
+    this.minScale = 1.0,
+    this.maxScale = 5.0,
     this.shouldRotate = true,
+    this.minDistanceToRotate = 0.0,
     this.clipChild = true,
     this.focalPointAlignment,
-    this.behavior = HitTestBehavior.deferToChild,
   })  : super(key: key);
 
   @override
@@ -113,14 +129,18 @@ class _MatrixGestureDetectorState extends State<MatrixGestureDetector> {
   Matrix4 rotationDeltaMatrix = Matrix4.identity();
   Matrix4 matrix = Matrix4.identity();
 
+  double rotateMax = 0;
+
   @override
   Widget build(BuildContext context) {
     Widget child =
         widget.clipChild ? ClipRect(child: widget.child) : widget.child;
     return GestureDetector(
-      behavior: widget.behavior,
       onScaleStart: onScaleStart,
       onScaleUpdate: onScaleUpdate,
+      onScaleEnd: (ScaleEndDetails details){
+        rotateMax = 0;
+      },
       child: child,
     );
   }
@@ -142,6 +162,7 @@ class _MatrixGestureDetectorState extends State<MatrixGestureDetector> {
     translationUpdater.value = details.focalPoint;
     scaleUpdater.value = 1.0;
     rotationUpdater.value = 0.0;
+    rotateMax = 0;
   }
 
   void onScaleUpdate(ScaleUpdateDetails details) {
@@ -152,8 +173,13 @@ class _MatrixGestureDetectorState extends State<MatrixGestureDetector> {
     // handle matrix translating
     if (widget.shouldTranslate) {
       Offset translationDelta = translationUpdater.update(details.focalPoint);
+
       translationDeltaMatrix = _translate(translationDelta);
-      matrix = translationDeltaMatrix * matrix;
+
+      Matrix4 _calculatedMatrix = translationDeltaMatrix * matrix;
+
+
+      matrix = _calculatedMatrix;
     }
 
     final focalPointAlignment = widget.focalPointAlignment;
@@ -161,18 +187,24 @@ class _MatrixGestureDetectorState extends State<MatrixGestureDetector> {
       details.localFocalPoint :
       focalPointAlignment.alongSize(context.size!);
 
-    // handle matrix scaling
     if (widget.shouldScale && details.scale != 1.0) {
       double scaleDelta = scaleUpdater.update(details.scale);
       scaleDeltaMatrix = _scale(scaleDelta, focalPoint);
-      matrix = scaleDeltaMatrix * matrix;
+      Matrix4 _calculatedMatrix = scaleDeltaMatrix * matrix;
+      if(_calculatedMatrix.getMaxScaleOnAxis() > widget.minScale && _calculatedMatrix.getMaxScaleOnAxis() <= widget.maxScale) {
+        matrix = _calculatedMatrix;
+      }
     }
 
     // handle matrix rotating
     if (widget.shouldRotate && details.rotation != 0.0) {
+
+      rotateMax = max(details.rotation.abs(), rotateMax);
       double rotationDelta = rotationUpdater.update(details.rotation);
       rotationDeltaMatrix = _rotate(rotationDelta, focalPoint);
-      matrix = rotationDeltaMatrix * matrix;
+      print("Max:${rotateMax} | ${details.rotation.abs()}");
+      if(rotateMax > widget.minDistanceToRotate)
+        matrix = rotationDeltaMatrix * matrix;
     }
 
     widget.onMatrixUpdate(
